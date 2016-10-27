@@ -109,6 +109,10 @@ static void register_shell_extension(){
 
 static void uninstall_extension(){
     inform(L"uninstall");
+    long errorCode = RegDeleteTreeW(HKEY_CLASSES_ROOT, L"CLSID\\" SERVER_GUID_TEXT);
+    if (errorCode != ERROR_SUCCESS){
+        display_error(errorCode);
+    }
 }
 
 static void install_extension(u16* server_path){
