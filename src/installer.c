@@ -1,4 +1,5 @@
 #define UNICODE
+#define _WIN32_WINNT _WIN32_WINNT_WIN7
 #include <windows.h>
 #include <tchar.h>
 #include <stdbool.h>
@@ -104,8 +105,33 @@ static bool register_com_server(u16* server_path, uint server_path_length){
 }
 
 static void register_shell_extension(){
+    HKEY key;
+    LONG errorCode = RegCreateKeyExW(
+         HKEY_CLASSES_ROOT,
+         L"AllFileSystemObjects\\ShellEx\\ContextMenuHandlers\\" SERVER_GUID_TEXT,
+         0, NULL,
+         REG_OPTION_NON_VOLATILE,
+         KEY_ALL_ACCESS,
+         NULL,
+         &key,
+         NULL
+    );
+    RegCloseKey(key);
+    if (errorCode != ERROR_SUCCESS){
+       display_error(errorCode);
+       return false;
+    }
 
 };
+
+static void unregister_shell_extension(){
+    long errorCode = RegDeleteTreeW(
+           HKEY_CLASSES_ROOT,
+           L"AllFileSystemObjects\\ShellEx\\ContextMenuHandlers\\" SERVER_GUID_TEXT);
+    if (errorCode != ERROR_SUCCESS){
+        display_error(errorCode);
+    }
+}
 
 static void uninstall_extension(){
     inform(L"uninstall");
@@ -113,6 +139,7 @@ static void uninstall_extension(){
     if (errorCode != ERROR_SUCCESS){
         display_error(errorCode);
     }
+    unregister_shell_extension();
 }
 
 static void install_extension(u16* server_path){
