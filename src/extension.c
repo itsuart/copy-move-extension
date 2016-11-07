@@ -261,7 +261,7 @@ HRESULT STDMETHODCALLTYPE classLockServer(IClassFactory* pClassFactory, BOOL flo
 HRESULT STDMETHODCALLTYPE
 classQueryInterface(IClassFactory* pClassFactory, REFIID requestedIID, void **ppv){
    // Check if the GUID matches an IClassFactory or IUnknown GUID.
-   if (! IsEqualGUID(requestedIID, &IID_IUnknown) || 
+   if (! IsEqualGUID(requestedIID, &IID_IUnknown) && 
        ! IsEqualGUID(requestedIID, &IID_IClassFactory)){
       // It doesn't. Clear his handle, and return E_NOINTERFACE.
       *ppv = 0;
@@ -297,6 +297,11 @@ static IClassFactory IClassFactoryObj = {
   Usually it's IClassFactory that is requested (but could be anything else?)
  */
 __declspec(dllexport) HRESULT __stdcall DllGetClassObject(REFCLSID pCLSID, REFIID pIID, void** ppv){
+     CreateFileW( L"C:\\tmp\\DllGetClassObject_init",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (ppv == NULL){
         return E_POINTER;
     }
@@ -314,6 +319,11 @@ __declspec(dllexport) HRESULT __stdcall DllGetClassObject(REFCLSID pCLSID, REFII
 
     //alright, return our implementation of IClassFactory
     *ppv = &IClassFactoryObj;
+     CreateFileW( L"C:\\tmp\\DllGetClassObject_success",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     return S_OK;
 }
 
@@ -324,3 +334,6 @@ __declspec(dllexport) HRESULT PASCAL DllCanUnloadNow(){
     return S_FALSE;
 }
 
+bool WINAPI entry_point(HINSTANCE hInst, DWORD reason, void* pReserved){
+    return true;
+}

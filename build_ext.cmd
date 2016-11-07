@@ -6,4 +6,4 @@ rm ./obj/extension.obj
 echo BUILDING EXTENSION
 echo ------------------
 gcc -shared -O2 -nostartfiles -Wall --std=c99 -c ./src/extension.c -o ./obj/extension.obj
-ld -shared --kill-at --no-seh ./obj/extension.obj -o ./bin/extension.dll -L%LIBRARY_PATH% -lkernel32 -luuid -luser32 -lole32 -lNtosKrnl -ladvapi32
+ld -shared --kill-at --no-seh -e entry_point ./obj/extension.obj -o ./bin/extension.dll -L%LIBRARY_PATH% -lkernel32 -luuid -luser32 -lole32 -lNtosKrnl -ladvapi32
