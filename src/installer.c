@@ -27,21 +27,22 @@ static uint remove_last_part_from_path(u16* full_path, uint full_path_length){
 }
 
 #define PROGNAME L"Copy-Move Shell Extension In/Unstaller"
+
 static const u16 extension_name[] = L"extension.dll\0";
 
-static bool ask(USHORT* question){
-    return IDYES == MessageBoxW(NULL, question, PROGNAME, MB_YESNO | MB_ICONQUESTION);
-}
-
-static void inform (USHORT* message){
+static void inform (u16* message){
     MessageBoxW(NULL, message, PROGNAME, MB_OK | MB_ICONINFORMATION);
 }
 
-static void error(USHORT* message){
+static bool ask(u16* question){
+    return IDYES == MessageBoxW(NULL, question, PROGNAME, MB_YESNO | MB_ICONQUESTION);
+}
+
+static void error(u16* message){
     MessageBoxW(NULL, message, PROGNAME, MB_OK | MB_ICONERROR);
 }
 
-static void warn(USHORT* message){
+static void warn(u16* message){
     MessageBoxW(NULL, message, PROGNAME, MB_OK | MB_ICONWARNING);
 }
 
@@ -104,7 +105,7 @@ static bool register_com_server(u16* server_path, uint server_path_length){
     return true;
 }
 
-static void register_shell_extension(){
+static bool register_shell_extension(){
     HKEY key;
     LONG errorCode = RegCreateKeyExW(
          HKEY_CLASSES_ROOT,
@@ -121,7 +122,7 @@ static void register_shell_extension(){
        display_error(errorCode);
        return false;
     }
-
+    return true;
 };
 
 static void unregister_shell_extension(){
@@ -159,10 +160,48 @@ static bool is_extension_installed(){
         return false;
     }
     result = CoCreateInstance(&SERVER_GUID, NULL, CLSCTX_INPROC_SERVER, &IID_IUnknown, (void**)&pIUnknown);
-    if (result == S_OK){
-        pIUnknown->lpVtbl->Release(pIUnknown);
-        return true;
+    switch (result){
+        case REGDB_E_CLASSNOTREG:{
+            error(L"REGDB_E_CLASSNOTREG");
+        } break;
+
+        case CLASS_E_NOAGGREGATION:{
+            error(L"CLASS_E_NOAGGREGATION");
+        } break;
+
+        case E_NOINTERFACE:{
+            error(L"E_NOINTERFACE");
+        } break;
+
+        case E_POINTER:{
+            error(L"E_POINTER");
+        } break;
+
+        case E_OUTOFMEMORY:{
+            error(L"E_OUTOFMEMORY");
+        } break;
+
+        case S_OK:{
+            pIUnknown->lpVtbl->Release(pIUnknown);
+            return true;
+        } break;
+
+        default:{
+
+            u16 alphabet[16] = L"0123456789ABCDEF";
+            u16 errorCode[2*sizeof(HRESULT) + 10] = {0};
+            for (int i = sizeof(HRESULT); i >= 0 ; i-= 1){
+                uint flag = 0xFF << (i*8);
+                uint part = (result & flag) >> (i*8);
+                uint high = (part & 0xF0) / 0x10;
+                uint low = (part & 0x0F);
+                errorCode[2*(sizeof(HRESULT) - i)] = alphabet[high];
+                errorCode[2*(sizeof(HRESULT) - i) + 1] = alphabet[low];
+            }
+            warn(errorCode);
+        }
     }
+
     return false;
 }
 

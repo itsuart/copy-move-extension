@@ -1,10 +1,12 @@
 #define _WIN32_WINNT _WIN32_WINNT_WIN7
 #define UNICODE
+
 #include <windows.h>
 #include <tchar.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <GuidDef.h>
+#include <Shobjidl.h>
 
 typedef uintmax_t uint;
 typedef intmax_t sint;
@@ -16,7 +18,7 @@ typedef USHORT u16;
 static bool is_server_guid(GUID* test){
     return IsEqualGUID(test, &SERVER_GUID);
 }
-
+/*
 static HANDLE hLogFile = INVALID_HANDLE_VALUE;
 static void open_log_file(){
     if (hLogFile != INVALID_HANDLE_VALUE){
@@ -36,11 +38,114 @@ static void close_log_file(){
         hLogFile = INVALID_HANDLE_VALUE;
     }
 }
+*/
+/* FORWARD DECLARATION EVERYTHING */
+struct tag_IMyObj;
 
-typedef struct {
+typedef struct tag_MyIContextMenuImpl {
+    IContextMenuVtbl* lpVtbl;
+    struct tag_IMyObj* pBase;
+} MyIContextMenuImpl;
+
+typedef struct tag_IMyObj{
     IUnknownVtbl* lpVtbl;
+    MyIContextMenuImpl contextMenuImpl;
     long int refsCount;
 } IMyObj;
+
+
+ULONG STDMETHODCALLTYPE myObj_AddRef(IMyObj* pMyObj);
+ULONG STDMETHODCALLTYPE myObj_Release(IMyObj* pMyObj);
+HRESULT STDMETHODCALLTYPE myObj_QueryInterface(IMyObj* pMyObj, REFIID requestedIID, void **ppv);
+
+/* BODY */
+
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(
+MyIContextMenuImpl* pImpl, UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR pszName,UINT cchMax){
+    //not really in use since Vista and we don't provide canonical verbs
+    return S_OK;
+}
+
+#define COPY_TO_MENU_OFFSET 1
+#define MOVE_TO_MENU_OFFSET 2
+
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFOEX pCommandInfo){
+    /* MSDN:
+If a canonical verb exists and a menu handler does not implement the canonical verb, it must return a failure code to enable the next handler to be able to handle this verb. Failing to do this will break functionality in the system including ShellExecute.
+
+Alternatively, rather than a pointer, this parameter can be MAKEINTRESOURCE(offset) where offset is the menu-identifier offset of the command to carry out. Implementations can use the IS_INTRESOURCE macro to detect that this alternative is being employed. The Shell uses this alternative when the user chooses a menu command.
+
+    */
+    //Since we do not provide verbs, just return failure for all non-offset argument
+    const u16* pVerbW = pCommandInfo->lpVerbW;
+    if (! IS_INTRESOURCE(pVerbW)){
+        return E_FAIL;
+    }
+
+    //TODO: properly handle nShow argument
+
+    //MSDN says it's important to use pCommandInfo->hwnd and using NULL could ruin all the things, so
+    if (pVerbW == (u16*)COPY_TO_MENU_OFFSET){
+        MessageBoxW(pCommandInfo->hwnd, L"You clicked COPY", L"My ext", MB_OK | MB_ICONINFORMATION);
+        return S_OK;
+    }
+
+    if (pVerbW == (u16*)MOVE_TO_MENU_OFFSET){
+        MessageBoxW(pCommandInfo->hwnd, L"You clicked MOVE", L"My ext", MB_OK | MB_ICONINFORMATION);
+        return S_OK;
+    }
+
+    MessageBoxW(pCommandInfo->hwnd, L"The fuck?!", L"My ext", MB_OK | MB_ICONWARNING);
+
+    return E_FAIL;
+}
+
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl* pImpl, 
+                                                           HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags){
+    if (CMF_DEFAULTONLY == (CMF_DEFAULTONLY & uFlags)){
+        //show only default menu items, so, non of ours
+        return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
+    }
+
+    //in highly unlikely case where is no room left in the menu:
+    if (idCmdFirst + 2 > idCmdLast){
+        //we don't add any menu enries of ours
+        return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
+    }
+
+    //insert our menu items: separator, copy and move in that order
+    InsertMenu(hmenu, indexMenu, MF_BYPOSITION | MF_SEPARATOR, idCmdFirst + 0, NULL);
+    InsertMenu(hmenu, indexMenu, MF_BYPOSITION | MF_STRING, idCmdFirst + COPY_TO_MENU_OFFSET, L"COPY Selected Items To...");
+    InsertMenu(hmenu, indexMenu, MF_BYPOSITION | MF_STRING, idCmdFirst + MOVE_TO_MENU_OFFSET, L"MOVE Selected Items To...");
+
+    return MAKE_HRESULT(SEVERITY_SUCCESS, 0, (MOVE_TO_MENU_OFFSET + 1)); //shouldn't this be +idCmdFirst?
+}
+
+
+ULONG STDMETHODCALLTYPE myIContextMenuImpl_AddRef(MyIContextMenuImpl* pImpl){
+    return myObj_AddRef(pImpl->pBase);
+}
+
+ULONG STDMETHODCALLTYPE myIContextMenuImpl_Release(MyIContextMenuImpl* pImpl){
+    return myObj_Release(pImpl->pBase);
+}
+
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryInterface(MyIContextMenuImpl* pImpl, REFIID requestedIID, void **ppv){
+    if (ppv == NULL){
+        return E_POINTER;
+    }
+
+    *ppv = NULL;
+
+    if (IsEqualGUID(requestedIID, &IID_IUnknown)){
+        *ppv = pImpl;
+        myObj_AddRef(pImpl->pBase);
+        return S_OK;
+    }
+
+    return myObj_QueryInterface(pImpl->pBase, requestedIID, ppv);
+
+}
 
 long int nObjectsAndRefs = 0;
 
@@ -64,20 +169,25 @@ ULONG STDMETHODCALLTYPE myObj_Release(IMyObj* pMyObj){
     return nRefs;
 }
 
-HRESULT STDMETHODCALLTYPE
-myObj_QueryInterface(IMyObj* pMyObj, REFIID requestedIID, void **ppv){
+HRESULT STDMETHODCALLTYPE myObj_QueryInterface(IMyObj* pMyObj, REFIID requestedIID, void **ppv){
     if (ppv == NULL){
         return E_POINTER;
     }
     *ppv = NULL;
 
-    if (! IsEqualGUID(requestedIID, &IID_IUnknown)){
-        return E_NOINTERFACE;
+    if (IsEqualGUID(requestedIID, &IID_IUnknown)){
+        *ppv = pMyObj;
+        myObj_AddRef(pMyObj);
+        return S_OK;
     }
 
-    *ppv = pMyObj;
-    pMyObj->lpVtbl->AddRef(pMyObj);
-    return S_OK;
+    if (IsEqualGUID(requestedIID, &IID_IContextMenu)){
+        *ppv = &(pMyObj->contextMenuImpl);
+        myObj_AddRef(pMyObj);
+        return S_OK;
+    }
+
+    return E_NOINTERFACE;
 }
 
 static IUnknownVtbl IMyObjVtbl = {
@@ -86,8 +196,16 @@ static IUnknownVtbl IMyObjVtbl = {
     .Release = &myObj_Release
 };
 
-HRESULT STDMETHODCALLTYPE classCreateInstance(
-        IClassFactory* pClassFactory, IUnknown* punkOuter, REFIID pRequestedIID, void** ppv){
+static IContextMenuVtbl IMyIContextMenuVtbl = {
+    .QueryInterface = &myIContextMenuImpl_QueryInterface,
+    .AddRef = &myIContextMenuImpl_AddRef,
+    .Release = &myIContextMenuImpl_Release,
+    .GetCommandString = &myIContextMenuImpl_GetCommandString,
+    .QueryContextMenu = &myIContextMenuImpl_QueryContextMenu,
+    .InvokeCommand = &myIContextMenuImpl_InvokeCommand
+};
+
+HRESULT STDMETHODCALLTYPE classCreateInstance(IClassFactory* pClassFactory, IUnknown* punkOuter, REFIID pRequestedIID, void** ppv){
     if (ppv == NULL){
         return E_POINTER;
     }
@@ -100,22 +218,24 @@ HRESULT STDMETHODCALLTYPE classCreateInstance(
        return CLASS_E_NOAGGREGATION;
    }
 
-   if (! IsEqualGUID(pRequestedIID, &IID_IUnknown)){
-       return E_NOINTERFACE;
-   }
-
-   IMyObj* pMyObj = GlobalAlloc(GMEM_FIXED, sizeof(IMyObj));
-   if (pMyObj == NULL){
-       return E_OUTOFMEMORY;
-   }
+   if (IsEqualGUID(pRequestedIID, &IID_IUnknown) || IsEqualGUID(pRequestedIID, &IID_IContextMenu)){
+       IMyObj* pMyObj = GlobalAlloc(GMEM_FIXED, sizeof(IMyObj));
+       if (pMyObj == NULL){
+           return E_OUTOFMEMORY;
+       }
    
-   pMyObj->lpVtbl = &IMyObjVtbl;
-   pMyObj->refsCount = 0;
-   pMyObj->lpVtbl->AddRef(pMyObj);
+       pMyObj->lpVtbl = &IMyObjVtbl;
+       pMyObj->refsCount = 0;
+       
+       pMyObj->contextMenuImpl.lpVtbl = &IMyIContextMenuVtbl;
+       pMyObj->contextMenuImpl.pBase = pMyObj;
+
+       return myObj_QueryInterface(pMyObj, pRequestedIID, ppv);
+
+   }
 
 
-   *ppv = pMyObj;
-   return S_OK;
+   return E_NOINTERFACE;
 }
 
 ULONG STDMETHODCALLTYPE classAddRef(IClassFactory* pClassFactory){
@@ -141,7 +261,7 @@ HRESULT STDMETHODCALLTYPE classLockServer(IClassFactory* pClassFactory, BOOL flo
 HRESULT STDMETHODCALLTYPE
 classQueryInterface(IClassFactory* pClassFactory, REFIID requestedIID, void **ppv){
    // Check if the GUID matches an IClassFactory or IUnknown GUID.
-   if (! IsEqualGUID(requestedIID, &IID_IUnknown) && 
+   if (! IsEqualGUID(requestedIID, &IID_IUnknown) || 
        ! IsEqualGUID(requestedIID, &IID_IClassFactory)){
       // It doesn't. Clear his handle, and return E_NOINTERFACE.
       *ppv = 0;
