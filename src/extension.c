@@ -47,9 +47,15 @@ typedef struct tag_MyIContextMenuImpl {
     struct tag_IMyObj* pBase;
 } MyIContextMenuImpl;
 
+typedef struct tag_MyIShellExtInitImpl {
+    IShellExtInitVtbl* lpVtbl;
+    struct tag_IMyObj* pBase;
+} MyIShellExtInitImpl;
+
 typedef struct tag_IMyObj{
     IUnknownVtbl* lpVtbl;
     MyIContextMenuImpl contextMenuImpl;
+    MyIShellExtInitImpl shellExtInitImpl;
     long int refsCount;
 } IMyObj;
 
@@ -59,9 +65,53 @@ ULONG STDMETHODCALLTYPE myObj_Release(IMyObj* pMyObj);
 HRESULT STDMETHODCALLTYPE myObj_QueryInterface(IMyObj* pMyObj, REFIID requestedIID, void **ppv);
 
 /* BODY */
+HRESULT STDMETHODCALLTYPE myIShellExtInit_AddRef(MyIShellExtInitImpl* pImpl){
+    return myObj_AddRef(pImpl->pBase);
+}
+
+ULONG STDMETHODCALLTYPE myIShellExtInit_Release(MyIShellExtInitImpl* pImpl){
+    return myObj_Release(pImpl->pBase);
+}
+
+HRESULT STDMETHODCALLTYPE myIShellExtInit_QueryInterface(MyIShellExtInitImpl* pImpl, REFIID requestedIID, void **ppv){
+    if (ppv == NULL){
+        return E_POINTER;
+    }
+
+    *ppv = NULL;
+
+    if (IsEqualGUID(requestedIID, &IID_IUnknown)){
+        *ppv = pImpl;
+        myObj_AddRef(pImpl->pBase);
+        return S_OK;
+    }
+
+    return myObj_QueryInterface(pImpl->pBase, requestedIID, ppv);
+
+}
+
+HRESULT STDMETHODCALLTYPE myIShellExtInit_Initialize(MyIShellExtInitImpl* pImpl, LPCITEMIDLIST pIDFolder, IDataObject *pDataObj, HKEY hRegKey){
+    //TODO: implement
+    return S_OK;
+}
+
+static IShellExtInitVtbl IMyIShellExtVtbl = {
+    .AddRef = &myIShellExtInit_AddRef,
+    .Release = &myIShellExtInit_Release,
+    .QueryInterface = &myIShellExtInit_QueryInterface,
+    .Initialize = &myIShellExtInit_Initialize
+};
+
+
 
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(
 MyIContextMenuImpl* pImpl, UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR pszName,UINT cchMax){
+     CreateFileW( L"C:\\tmp\\GetCommandString",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
     //not really in use since Vista and we don't provide canonical verbs
     return S_OK;
 }
@@ -69,7 +119,13 @@ MyIContextMenuImpl* pImpl, UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR p
 #define COPY_TO_MENU_OFFSET 1
 #define MOVE_TO_MENU_OFFSET 2
 
-HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFOEX pCommandInfo){
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFO pCommandInfo){
+     CreateFileW( L"C:\\tmp\\InvokeCommand",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
     /* MSDN:
 If a canonical verb exists and a menu handler does not implement the canonical verb, it must return a failure code to enable the next handler to be able to handle this verb. Failing to do this will break functionality in the system including ShellExecute.
 
@@ -77,31 +133,35 @@ Alternatively, rather than a pointer, this parameter can be MAKEINTRESOURCE(offs
 
     */
     //Since we do not provide verbs, just return failure for all non-offset argument
-    const u16* pVerbW = pCommandInfo->lpVerbW;
-    if (! IS_INTRESOURCE(pVerbW)){
+    const char* pVerb = pCommandInfo->lpVerb;
+    if (! IS_INTRESOURCE(pVerb)){
         return E_FAIL;
     }
 
     //TODO: properly handle nShow argument
 
     //MSDN says it's important to use pCommandInfo->hwnd and using NULL could ruin all the things, so
-    if (pVerbW == (u16*)COPY_TO_MENU_OFFSET){
+    if (pVerb == MAKEINTRESOURCE(COPY_TO_MENU_OFFSET)){
         MessageBoxW(pCommandInfo->hwnd, L"You clicked COPY", L"My ext", MB_OK | MB_ICONINFORMATION);
         return S_OK;
     }
 
-    if (pVerbW == (u16*)MOVE_TO_MENU_OFFSET){
+    if (pVerb == MAKEINTRESOURCE(MOVE_TO_MENU_OFFSET)){
         MessageBoxW(pCommandInfo->hwnd, L"You clicked MOVE", L"My ext", MB_OK | MB_ICONINFORMATION);
         return S_OK;
     }
-
-    MessageBoxW(pCommandInfo->hwnd, L"The fuck?!", L"My ext", MB_OK | MB_ICONWARNING);
 
     return E_FAIL;
 }
 
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl* pImpl, 
                                                            HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags){
+     CreateFileW( L"C:\\tmp\\QueryContextMenu_init",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
     if (CMF_DEFAULTONLY == (CMF_DEFAULTONLY & uFlags)){
         //show only default menu items, so, non of ours
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
@@ -113,10 +173,16 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
     }
 
-    //insert our menu items: separator, copy and move in that order
-    InsertMenu(hmenu, indexMenu, MF_BYPOSITION | MF_SEPARATOR, idCmdFirst + 0, NULL);
-    InsertMenu(hmenu, indexMenu, MF_BYPOSITION | MF_STRING, idCmdFirst + COPY_TO_MENU_OFFSET, L"COPY Selected Items To...");
-    InsertMenu(hmenu, indexMenu, MF_BYPOSITION | MF_STRING, idCmdFirst + MOVE_TO_MENU_OFFSET, L"MOVE Selected Items To...");
+    //insert our menu items: separator, copy and move in that order.
+    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_SEPARATOR, idCmdFirst + 0, NULL);
+    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + COPY_TO_MENU_OFFSET, L"COPY Selected Items To...");
+    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + MOVE_TO_MENU_OFFSET, L"MOVE Selected Items To...");
+
+     CreateFileW( L"C:\\tmp\\QueryContextMenu_success",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
     return MAKE_HRESULT(SEVERITY_SUCCESS, 0, (MOVE_TO_MENU_OFFSET + 1)); //shouldn't this be +idCmdFirst?
 }
@@ -184,8 +250,27 @@ HRESULT STDMETHODCALLTYPE myObj_QueryInterface(IMyObj* pMyObj, REFIID requestedI
     if (IsEqualGUID(requestedIID, &IID_IContextMenu)){
         *ppv = &(pMyObj->contextMenuImpl);
         myObj_AddRef(pMyObj);
+     CreateFileW( L"C:\\tmp\\query_IContextMenu_success",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
         return S_OK;
     }
+
+    if (IsEqualGUID(requestedIID, &IID_IShellExtInit)){
+        *ppv = &(pMyObj->shellExtInitImpl);
+        myObj_AddRef(pMyObj);
+     CreateFileW( L"C:\\tmp\\query_ISHellExtInit_success",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+        return S_OK;
+    }
+
 
     return E_NOINTERFACE;
 }
@@ -205,6 +290,7 @@ static IContextMenuVtbl IMyIContextMenuVtbl = {
     .InvokeCommand = &myIContextMenuImpl_InvokeCommand
 };
 
+
 HRESULT STDMETHODCALLTYPE classCreateInstance(IClassFactory* pClassFactory, IUnknown* punkOuter, REFIID pRequestedIID, void** ppv){
     if (ppv == NULL){
         return E_POINTER;
@@ -218,7 +304,10 @@ HRESULT STDMETHODCALLTYPE classCreateInstance(IClassFactory* pClassFactory, IUnk
        return CLASS_E_NOAGGREGATION;
    }
 
-   if (IsEqualGUID(pRequestedIID, &IID_IUnknown) || IsEqualGUID(pRequestedIID, &IID_IContextMenu)){
+   if (IsEqualGUID(pRequestedIID, &IID_IUnknown) 
+       || IsEqualGUID(pRequestedIID, &IID_IContextMenu)
+       || IsEqualGUID(pRequestedIID, &IID_IShellExtInit)
+       ){
        IMyObj* pMyObj = GlobalAlloc(GMEM_FIXED, sizeof(IMyObj));
        if (pMyObj == NULL){
            return E_OUTOFMEMORY;
@@ -229,6 +318,16 @@ HRESULT STDMETHODCALLTYPE classCreateInstance(IClassFactory* pClassFactory, IUnk
        
        pMyObj->contextMenuImpl.lpVtbl = &IMyIContextMenuVtbl;
        pMyObj->contextMenuImpl.pBase = pMyObj;
+
+       pMyObj->shellExtInitImpl.lpVtbl = &IMyIShellExtVtbl;
+       pMyObj->shellExtInitImpl.pBase = pMyObj;
+
+     CreateFileW( L"C:\\tmp\\classCreateInstance_success",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
 
        return myObj_QueryInterface(pMyObj, pRequestedIID, ppv);
 
@@ -275,6 +374,13 @@ classQueryInterface(IClassFactory* pClassFactory, REFIID requestedIID, void **pp
    // Call our IClassFactory's AddRef, passing the IClassFactory. 
    pClassFactory->lpVtbl->AddRef(pClassFactory);
 
+     CreateFileW( L"C:\\tmp\\classfactory_query_success",
+                            GENERIC_WRITE,
+                            0,
+                            NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+
    // Let him know he indeed has an IClassFactory. 
    return S_OK;
 }
@@ -297,11 +403,6 @@ static IClassFactory IClassFactoryObj = {
   Usually it's IClassFactory that is requested (but could be anything else?)
  */
 __declspec(dllexport) HRESULT __stdcall DllGetClassObject(REFCLSID pCLSID, REFIID pIID, void** ppv){
-     CreateFileW( L"C:\\tmp\\DllGetClassObject_init",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (ppv == NULL){
         return E_POINTER;
     }
@@ -319,11 +420,6 @@ __declspec(dllexport) HRESULT __stdcall DllGetClassObject(REFCLSID pCLSID, REFII
 
     //alright, return our implementation of IClassFactory
     *ppv = &IClassFactoryObj;
-     CreateFileW( L"C:\\tmp\\DllGetClassObject_success",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     return S_OK;
 }
 
