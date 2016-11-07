@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <GuidDef.h>
 #include <Shobjidl.h>
+#include <Shlobj.h>
 
 typedef uintmax_t uint;
 typedef intmax_t sint;
@@ -18,27 +19,7 @@ typedef USHORT u16;
 static bool is_server_guid(GUID* test){
     return IsEqualGUID(test, &SERVER_GUID);
 }
-/*
-static HANDLE hLogFile = INVALID_HANDLE_VALUE;
-static void open_log_file(){
-    if (hLogFile != INVALID_HANDLE_VALUE){
-        return;
-    }
-    hLogFile = CreateFileW( L"C:\\tmp\\server_log.txt",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    
-}
 
-static void close_log_file(){
-    if (hLogFile != INVALID_HANDLE_VALUE){
-        CloseHandle(hLogFile);
-        hLogFile = INVALID_HANDLE_VALUE;
-    }
-}
-*/
 /* FORWARD DECLARATION EVERYTHING */
 struct tag_IMyObj;
 
@@ -56,6 +37,8 @@ typedef struct tag_IMyObj{
     IUnknownVtbl* lpVtbl;
     MyIContextMenuImpl contextMenuImpl;
     MyIShellExtInitImpl shellExtInitImpl;
+    uint nItems;
+    u16* itemNames;
     long int refsCount;
 } IMyObj;
 
@@ -90,8 +73,41 @@ HRESULT STDMETHODCALLTYPE myIShellExtInit_QueryInterface(MyIShellExtInitImpl* pI
 
 }
 
-HRESULT STDMETHODCALLTYPE myIShellExtInit_Initialize(MyIShellExtInitImpl* pImpl, LPCITEMIDLIST pIDFolder, IDataObject *pDataObj, HKEY hRegKey){
-    //TODO: implement
+HRESULT STDMETHODCALLTYPE myIShellExtInit_Initialize(MyIShellExtInitImpl* pImpl, LPCITEMIDLIST pIDFolder, IDataObject* pDataObj, HKEY hRegKey){
+    FORMATETC   fe = {CF_HDROP, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM   medium;
+
+    if (pImpl->pBase->itemNames != NULL){
+        GlobalFree(pImpl->pBase->itemNames);
+        pImpl->pBase->itemNames = NULL;
+        pImpl->pBase->nItems = 0;
+    }
+
+    if (SUCCEEDED(pDataObj->lpVtbl->GetData(pDataObj, &fe, &medium))){
+        // Get the count of files dropped.
+        uint uCount = DragQueryFile((HDROP)medium.hGlobal, (UINT)-1, NULL, 0);
+        if (uCount > 0){
+            u16* allNamesBuffer = GlobalAlloc(GPTR, (uCount * (MAX_UNICODE_PATH_LENGTH + 1) + 1) * sizeof(u16));
+            if (allNamesBuffer == NULL){
+                ReleaseStgMedium(&medium);
+                return E_OUTOFMEMORY;
+            }
+
+            //copy file items to the buffer
+            u16* currentName = allNamesBuffer;
+            for (uint i = 0; i < uCount; i += 1){
+                uint nCharsCopied = DragQueryFileW((HDROP)medium.hGlobal, i, currentName, MAX_UNICODE_PATH_LENGTH);
+                if (nCharsCopied){
+                    currentName += (nCharsCopied + 1);
+                } else {/*copying fucked up */}
+            }
+            pImpl->pBase->nItems = uCount;
+            pImpl->pBase->itemNames = allNamesBuffer;
+        }
+
+        ReleaseStgMedium(&medium);
+    }
+
     return S_OK;
 }
 
@@ -104,14 +120,8 @@ static IShellExtInitVtbl IMyIShellExtVtbl = {
 
 
 
-HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(
-MyIContextMenuImpl* pImpl, UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR pszName,UINT cchMax){
-     CreateFileW( L"C:\\tmp\\GetCommandString",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(MyIContextMenuImpl* pImpl, 
+                                                              UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR pszName,UINT cchMax){
     //not really in use since Vista and we don't provide canonical verbs
     return S_OK;
 }
@@ -119,70 +129,110 @@ MyIContextMenuImpl* pImpl, UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR p
 #define COPY_TO_MENU_OFFSET 1
 #define MOVE_TO_MENU_OFFSET 2
 
+//I really hate person that causes me "undefined reference to `___chkstk_ms'" errors. And extra calls to clear the memory.
+static u16 temp[MAX_UNICODE_PATH_LENGTH + 1] = {0};
+static u16 targetDir[MAX_UNICODE_PATH_LENGTH + 2]; //extra 1 for trailing zero
+static u16 FULL_OF_ZEROES[MAX_UNICODE_PATH_LENGTH + 2] = {0}; //extra 1 for trailing zero
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFO pCommandInfo){
-     CreateFileW( L"C:\\tmp\\InvokeCommand",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    IMyObj* pBase = pImpl->pBase;
+    
+    if (pBase->nItems == 0){
+        return S_OK; //instantly copy or move nothing!
+    }
 
-    /* MSDN:
-If a canonical verb exists and a menu handler does not implement the canonical verb, it must return a failure code to enable the next handler to be able to handle this verb. Failing to do this will break functionality in the system including ShellExecute.
-
-Alternatively, rather than a pointer, this parameter can be MAKEINTRESOURCE(offset) where offset is the menu-identifier offset of the command to carry out. Implementations can use the IS_INTRESOURCE macro to detect that this alternative is being employed. The Shell uses this alternative when the user chooses a menu command.
-
-    */
-    //Since we do not provide verbs, just return failure for all non-offset argument
     const char* pVerb = pCommandInfo->lpVerb;
+
     if (! IS_INTRESOURCE(pVerb)){
+        if (pBase->itemNames != NULL){
+            GlobalFree(pBase->itemNames);
+        }
+        pBase->itemNames = NULL;
+        pBase->nItems = 0;
+
         return E_FAIL;
     }
 
-    //TODO: properly handle nShow argument
+    BROWSEINFOW browseInfo = {
+        .hwndOwner = pCommandInfo->hwnd,
+        .pidlRoot = NULL,
+        .pszDisplayName = &temp[0],
+        .lpszTitle = L"ERROR!",
+        .ulFlags = BIF_NEWDIALOGSTYLE,
+        .lpfn = NULL,
+        .lParam = 0,
+        .iImage = -1
+    };
 
-    //MSDN says it's important to use pCommandInfo->hwnd and using NULL could ruin all the things, so
-    if (pVerb == MAKEINTRESOURCE(COPY_TO_MENU_OFFSET)){
-        MessageBoxW(pCommandInfo->hwnd, L"You clicked COPY", L"My ext", MB_OK | MB_ICONINFORMATION);
-        return S_OK;
+    SHFILEOPSTRUCT shFileOp = {
+        .hwnd = pCommandInfo->hwnd,
+        .wFunc = FO_COPY,
+        .pFrom = pBase->itemNames,
+        .pTo = (u16*)&targetDir,
+        .fFlags = FOF_ALLOWUNDO,
+        .fAnyOperationsAborted = false,
+        .hNameMappings = NULL,
+        .lpszProgressTitle = L"ERROR!"
+    };
+
+    if ((void*)pVerb == (void*)MAKEINTRESOURCE(COPY_TO_MENU_OFFSET)){
+        browseInfo.lpszTitle = pBase->nItems > 0 ? L"COPY selected items to:" : L"COPY selected item to:";
+        shFileOp.wFunc = FO_COPY;
+    } else if ((void*)pVerb == (void*)MAKEINTRESOURCE(MOVE_TO_MENU_OFFSET)){
+        browseInfo.lpszTitle = pBase->nItems > 0 ? L"MOVE selected items to:" : L"MOVE selected item to:";
+        shFileOp.wFunc = FO_MOVE;
+    } else {
+
+        if (pBase->itemNames != NULL){
+            GlobalFree(pBase->itemNames);
+        }
+        pBase->itemNames = NULL;
+        pBase->nItems = 0;
+
+        return E_FAIL;
     }
 
-    if (pVerb == MAKEINTRESOURCE(MOVE_TO_MENU_OFFSET)){
-        MessageBoxW(pCommandInfo->hwnd, L"You clicked MOVE", L"My ext", MB_OK | MB_ICONINFORMATION);
-        return S_OK;
+    PIDLIST_ABSOLUTE ret = SHBrowseForFolderW(&browseInfo);
+    if (ret){
+        *targetDir = *FULL_OF_ZEROES;
+        if (SHGetPathFromIDListW(ret, &targetDir[0])){
+            SHFileOperation(&shFileOp);
+        }
     }
 
-    return E_FAIL;
+    if (pBase->itemNames != NULL){
+        GlobalFree(pBase->itemNames);
+    }
+    pBase->itemNames = NULL;
+    pBase->nItems = 0;
+    
+    return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl* pImpl, 
                                                            HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags){
-     CreateFileW( L"C:\\tmp\\QueryContextMenu_init",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
     if (CMF_DEFAULTONLY == (CMF_DEFAULTONLY & uFlags)){
         //show only default menu items, so, non of ours
+        //TODO: free memory for names? since we don't even display our menu items
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
     }
 
     //in highly unlikely case where is no room left in the menu:
     if (idCmdFirst + 2 > idCmdLast){
         //we don't add any menu enries of ours
+        //TODO: free memory for names? since we don't even display our menu items
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
     }
 
+    //TODO: it might be wiser to extract filenames here
+
     //insert our menu items: separator, copy and move in that order.
     InsertMenu(hmenu, -1, MF_BYPOSITION | MF_SEPARATOR, idCmdFirst + 0, NULL);
-    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + COPY_TO_MENU_OFFSET, L"COPY Selected Items To...");
-    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + MOVE_TO_MENU_OFFSET, L"MOVE Selected Items To...");
+    
+    u16* copyMenuItemText = pImpl->pBase->nItems > 1 ? L"COPY Selected Items To..." : L"COPY Selected Item To...";
+    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + COPY_TO_MENU_OFFSET, copyMenuItemText);
 
-     CreateFileW( L"C:\\tmp\\QueryContextMenu_success",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    u16* moveMenuItemText = pImpl->pBase->nItems > 1 ? L"MOVE Selected Items To..." : L"MOVE Selected Item To...";
+    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + MOVE_TO_MENU_OFFSET, moveMenuItemText);
 
     return MAKE_HRESULT(SEVERITY_SUCCESS, 0, (MOVE_TO_MENU_OFFSET + 1)); //shouldn't this be +idCmdFirst?
 }
@@ -229,6 +279,11 @@ ULONG STDMETHODCALLTYPE myObj_Release(IMyObj* pMyObj){
     long int nRefs = pMyObj->refsCount;
 
     if (nRefs == 0){
+        if (pMyObj->itemNames != NULL){
+            GlobalFree(pMyObj->itemNames);
+            pMyObj->itemNames = NULL;
+            pMyObj->nItems = 0;
+        }
         GlobalFree(pMyObj);
     }
 
@@ -250,11 +305,6 @@ HRESULT STDMETHODCALLTYPE myObj_QueryInterface(IMyObj* pMyObj, REFIID requestedI
     if (IsEqualGUID(requestedIID, &IID_IContextMenu)){
         *ppv = &(pMyObj->contextMenuImpl);
         myObj_AddRef(pMyObj);
-     CreateFileW( L"C:\\tmp\\query_IContextMenu_success",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
         return S_OK;
     }
@@ -262,11 +312,6 @@ HRESULT STDMETHODCALLTYPE myObj_QueryInterface(IMyObj* pMyObj, REFIID requestedI
     if (IsEqualGUID(requestedIID, &IID_IShellExtInit)){
         *ppv = &(pMyObj->shellExtInitImpl);
         myObj_AddRef(pMyObj);
-     CreateFileW( L"C:\\tmp\\query_ISHellExtInit_success",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
         return S_OK;
     }
@@ -308,31 +353,21 @@ HRESULT STDMETHODCALLTYPE classCreateInstance(IClassFactory* pClassFactory, IUnk
        || IsEqualGUID(pRequestedIID, &IID_IContextMenu)
        || IsEqualGUID(pRequestedIID, &IID_IShellExtInit)
        ){
-       IMyObj* pMyObj = GlobalAlloc(GMEM_FIXED, sizeof(IMyObj));
+       IMyObj* pMyObj = GlobalAlloc(GPTR, sizeof(IMyObj)); //Zero the memory
        if (pMyObj == NULL){
            return E_OUTOFMEMORY;
        }
    
        pMyObj->lpVtbl = &IMyObjVtbl;
-       pMyObj->refsCount = 0;
-       
+
        pMyObj->contextMenuImpl.lpVtbl = &IMyIContextMenuVtbl;
        pMyObj->contextMenuImpl.pBase = pMyObj;
 
        pMyObj->shellExtInitImpl.lpVtbl = &IMyIShellExtVtbl;
        pMyObj->shellExtInitImpl.pBase = pMyObj;
 
-     CreateFileW( L"C:\\tmp\\classCreateInstance_success",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
-
        return myObj_QueryInterface(pMyObj, pRequestedIID, ppv);
-
    }
-
 
    return E_NOINTERFACE;
 }
@@ -367,21 +402,8 @@ classQueryInterface(IClassFactory* pClassFactory, REFIID requestedIID, void **pp
       return E_NOINTERFACE;
    }
 
-   // First, we fill in his handle with the same object pointer he passed us.
-   // That's our IClassFactory (MyIClassFactoryObj) he obtained from us.
    *ppv = pClassFactory;
-
-   // Call our IClassFactory's AddRef, passing the IClassFactory. 
-   pClassFactory->lpVtbl->AddRef(pClassFactory);
-
-     CreateFileW( L"C:\\tmp\\classfactory_query_success",
-                            GENERIC_WRITE,
-                            0,
-                            NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
-
-   // Let him know he indeed has an IClassFactory. 
+    pClassFactory->lpVtbl->AddRef(pClassFactory);
    return S_OK;
 }
 
