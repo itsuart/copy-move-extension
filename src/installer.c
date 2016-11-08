@@ -13,6 +13,19 @@ typedef USHORT u16;
 /* GLOBALS */
 #include "common.c"
 
+static void display_error(DWORD error){
+    u16* reason = NULL;
+
+    FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM, NULL, error, 0, (LPWSTR)&reason, 1, NULL);
+    MessageBoxW(NULL, reason, NULL, MB_OK);
+    HeapFree(GetProcessHeap(), 0, reason);
+}
+
+static void display_last_error(){
+    DWORD last_error = GetLastError();
+    return display_error(last_error);
+}
+
 static uint remove_last_part_from_path(u16* full_path, uint full_path_length){
     while (full_path_length >= 0){
         u16* current_ptr = full_path + full_path_length;

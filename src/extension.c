@@ -129,10 +129,27 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(MyIContextMenuImpl
 #define COPY_TO_MENU_OFFSET 1
 #define MOVE_TO_MENU_OFFSET 2
 
+UINT_PTR CALLBACK OFNHookProc(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lParam){
+    if (uiMsg == WM_NOTIFY){
+        OFNOTIFYW* pNotify = (OFNOTIFYW*)lParam;
+        if (pNotify->hdr.code == CDN_FILEOK){
+            return 0;
+        }
+    }
+    return 1;
+}
+
+
+static void cleanup_names_storage(IMyObj* pBase){
+    if (pBase->itemNames != NULL){
+        GlobalFree(pBase->itemNames);
+    }
+    pBase->itemNames = NULL;
+    pBase->nItems = 0;
+}
+
 //I really hate person that causes me "undefined reference to `___chkstk_ms'" errors. And extra calls to clear the memory.
-static u16 temp[MAX_UNICODE_PATH_LENGTH + 1] = {0};
 static u16 targetDir[MAX_UNICODE_PATH_LENGTH + 2]; //extra 1 for trailing zero
-static u16 FULL_OF_ZEROES[MAX_UNICODE_PATH_LENGTH + 2] = {0}; //extra 1 for trailing zero
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFO pCommandInfo){
     IMyObj* pBase = pImpl->pBase;
     
@@ -143,68 +160,79 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
     const char* pVerb = pCommandInfo->lpVerb;
 
     if (! IS_INTRESOURCE(pVerb)){
-        if (pBase->itemNames != NULL){
-            GlobalFree(pBase->itemNames);
-        }
-        pBase->itemNames = NULL;
-        pBase->nItems = 0;
-
+        cleanup_names_storage(pBase);
         return E_FAIL;
     }
 
-    BROWSEINFOW browseInfo = {
-        .hwndOwner = pCommandInfo->hwnd,
-        .pidlRoot = NULL,
-        .pszDisplayName = &temp[0],
-        .lpszTitle = L"ERROR!",
-        .ulFlags = BIF_NEWDIALOGSTYLE,
-        .lpfn = NULL,
-        .lParam = 0,
-        .iImage = -1
-    };
-
-    SHFILEOPSTRUCT shFileOp = {
-        .hwnd = pCommandInfo->hwnd,
-        .wFunc = FO_COPY,
-        .pFrom = pBase->itemNames,
-        .pTo = (u16*)&targetDir,
-        .fFlags = FOF_ALLOWUNDO,
-        .fAnyOperationsAborted = false,
-        .hNameMappings = NULL,
-        .lpszProgressTitle = L"ERROR!"
-    };
-
-    if ((void*)pVerb == (void*)MAKEINTRESOURCE(COPY_TO_MENU_OFFSET)){
-        browseInfo.lpszTitle = pBase->nItems > 0 ? L"COPY selected items to:" : L"COPY selected item to:";
-        shFileOp.wFunc = FO_COPY;
-    } else if ((void*)pVerb == (void*)MAKEINTRESOURCE(MOVE_TO_MENU_OFFSET)){
-        browseInfo.lpszTitle = pBase->nItems > 0 ? L"MOVE selected items to:" : L"MOVE selected item to:";
-        shFileOp.wFunc = FO_MOVE;
-    } else {
-
-        if (pBase->itemNames != NULL){
-            GlobalFree(pBase->itemNames);
-        }
-        pBase->itemNames = NULL;
-        pBase->nItems = 0;
-
-        return E_FAIL;
-    }
-
-    PIDLIST_ABSOLUTE ret = SHBrowseForFolderW(&browseInfo);
-    if (ret){
-        *targetDir = *FULL_OF_ZEROES;
-        if (SHGetPathFromIDListW(ret, &targetDir[0])){
-            SHFileOperation(&shFileOp);
-        }
-    }
-
-    if (pBase->itemNames != NULL){
-        GlobalFree(pBase->itemNames);
-    }
-    pBase->itemNames = NULL;
-    pBase->nItems = 0;
+    u16* title = NULL;
+    uint fileOp;
     
+    if ((void*)pVerb == (void*)MAKEINTRESOURCE(COPY_TO_MENU_OFFSET)){
+        title  = pBase->nItems > 0 ? L"COPY selected items to:" : L"COPY selected item to:";
+        fileOp = FO_COPY;
+    } else if ((void*)pVerb == (void*)MAKEINTRESOURCE(MOVE_TO_MENU_OFFSET)){
+        title = pBase->nItems > 0 ? L"MOVE selected items to:" : L"MOVE selected item to:";
+        fileOp = FO_MOVE;
+    } else {
+        cleanup_names_storage(pBase);
+        return E_FAIL;
+    }
+
+    //I want my monads in C!
+    HRESULT hr = S_OK; 
+    // Create a new common open file dialog.
+    IFileOpenDialog *pfd = NULL;
+    hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void**)&pfd);
+    if (SUCCEEDED(hr)){
+        // Set the dialog as a folder picker.
+        DWORD dwOptions;
+        hr = pfd->lpVtbl->GetOptions(pfd, &dwOptions);
+        if (SUCCEEDED(hr)){
+            hr = pfd->lpVtbl->SetOptions(pfd, dwOptions | FOS_PICKFOLDERS);
+        }
+
+        // Set the title of the dialog.
+        if (SUCCEEDED(hr)){
+            hr = pfd->lpVtbl->SetTitle(pfd, title);
+        }
+
+        // Show the open file dialog.
+        if (SUCCEEDED(hr)){
+            hr = pfd->lpVtbl->Show(pfd, pCommandInfo->hwnd);
+            if (SUCCEEDED(hr)){
+                // Get the selection from the user.
+                IShellItem *psiResult = NULL;
+                hr = pfd->lpVtbl->GetResult(pfd, &psiResult);
+                if (SUCCEEDED(hr)){
+                    u16* pszPath = NULL;
+                    hr = psiResult->lpVtbl->GetDisplayName(psiResult, SIGDN_FILESYSPATH, &pszPath);
+                    if (SUCCEEDED(hr)){
+                        SecureZeroMemory(targetDir, sizeof(targetDir));
+                        lstrcpyW(&targetDir[0], pszPath);
+                        //StringCchCopy(targetDir, sizeof(targetDir)/sizeof(targetDir[0]), pszPath);
+                        CoTaskMemFree(pszPath);
+
+                        SHFILEOPSTRUCT shFileOp = {
+                            .hwnd = pCommandInfo->hwnd,
+                            .wFunc = fileOp,
+                            .pFrom = pBase->itemNames,
+                            .pTo = &targetDir[0],
+                            .fFlags = FOF_ALLOWUNDO,
+                            .fAnyOperationsAborted = false,
+                            .hNameMappings = NULL,
+                            .lpszProgressTitle = L"ERROR!"
+                        };
+
+                        SHFileOperation(&shFileOp);                        
+                    }
+                    psiResult->lpVtbl->Release(psiResult);
+                }
+            }
+        }
+    }
+
+    pfd->lpVtbl->Release(pfd);
+    cleanup_names_storage(pBase);
     return S_OK;
 }
 
