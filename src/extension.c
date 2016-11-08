@@ -110,6 +110,8 @@ HRESULT STDMETHODCALLTYPE myIShellExtInit_Initialize(MyIShellExtInitImpl* pImpl,
         ReleaseStgMedium(&medium);
     }
 
+    OutputDebugStringW(L"Initialize success");
+
     return S_OK;
 }
 
@@ -120,12 +122,15 @@ static IShellExtInitVtbl IMyIShellExtVtbl = {
     .Initialize = &myIShellExtInit_Initialize
 };
 
-
+static const u16* COPY_VERB = SERVER_GUID_TEXT L".COPY";
+static const u16* MOVE_VERB = SERVER_GUID_TEXT L".MOVE";
 
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(MyIContextMenuImpl* pImpl, 
                                                               UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR pszName,UINT cchMax){
     //not really in use since Vista and we don't provide canonical verbs
-    return S_OK;
+    OutputDebugStringW(L"GetCommandString");
+    return E_FAIL;
+    //    return S_OK;
 }
 
 #define COPY_TO_MENU_OFFSET 1
@@ -144,9 +149,12 @@ static u16 targetDir[MAX_UNICODE_PATH_LENGTH + 2]; //extra 1 for trailing zero
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFO pCommandInfo){
     IMyObj* pBase = pImpl->pBase;
     
+    OutputDebugStringW(L"FOO");
+
     if (pBase->nItems == 0){
         return S_OK; //instantly copy or move nothing!
     }
+    OutputDebugStringW(L"BAR");
 
     const char* pVerb = pCommandInfo->lpVerb;
 
@@ -154,27 +162,29 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
         cleanup_names_storage(pBase);
         return E_FAIL;
     }
-
+    OutputDebugStringW(L"BAZ");
+    
     u16* title = NULL;
     uint fileOp;
     
     if ((void*)pVerb == (void*)MAKEINTRESOURCE(COPY_TO_MENU_OFFSET)){
-        title  = pBase->nItems > 0 ? L"COPY selected items to:" : L"COPY selected item to:";
+        title  = &pImpl->copyLabelBuffer[0];
         fileOp = FO_COPY;
     } else if ((void*)pVerb == (void*)MAKEINTRESOURCE(MOVE_TO_MENU_OFFSET)){
-        title = pBase->nItems > 0 ? L"MOVE selected items to:" : L"MOVE selected item to:";
+        title =  &pImpl->moveLabelBuffer[0];
         fileOp = FO_MOVE;
     } else {
         cleanup_names_storage(pBase);
         return E_FAIL;
     }
-
+    OutputDebugStringW(L"BAZ+");
     //I want my monads in C!
     HRESULT hr = S_OK; 
     // Create a new common open file dialog.
     IFileOpenDialog *pfd = NULL;
     hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void**)&pfd);
     if (SUCCEEDED(hr)){
+    OutputDebugStringW(L"BAZ++");
         // Set the dialog as a folder picker.
         DWORD dwOptions;
         hr = pfd->lpVtbl->GetOptions(pfd, &dwOptions);
@@ -238,12 +248,9 @@ uint u64toW(uint number, u16 stringBuffer[20]){
     uint divisor = 10;
     int power = 0;
     char reminders[20] = {0};
-    OutputDebugStringW(L"reminding");
-    u16 foo[2] = L" \0";
+
     for (; power < 20; power += 1){
         char reminder = number % divisor;
-        foo[0] = DIGITS[reminder];
-        OutputDebugStringW(&foo[0]);
 
         reminders[power] = reminder;
         number = number / divisor;
@@ -253,7 +260,6 @@ uint u64toW(uint number, u16 stringBuffer[20]){
         }
     }
 
-    OutputDebugStringW(L"printing");
     //put 'em digits in correct order
     for (int i = power; i >= 0; i -= 1){
         stringBuffer[power - i] = DIGITS[reminders[i]];
@@ -268,12 +274,10 @@ void mk_label (u16* prefix, uint number, u16* buffer){
         buffer[index] = prefix[index];
         index += 1;
     }
-    OutputDebugStringW(L"u64ToW");
     uint nDigits = u64toW(number, buffer + index);
     index += nDigits;
 
     lstrcpyW(buffer + index + 1, number > 1 ? L" items to..." : L" item to...");
-    OutputDebugStringW(buffer);
 }
 
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl* pImpl, 
@@ -295,9 +299,6 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
     }
 
-    OutputDebugStringW(pBase->nItems > 16 ? L"OVER 16!" : L"<= 16");
-
-
     SecureZeroMemory(pImpl->copyLabelBuffer, sizeof(pImpl->copyLabelBuffer));
     mk_label(L"COPY ", pBase->nItems, &pImpl->copyLabelBuffer[0]);
 
@@ -309,7 +310,9 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl
     InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + COPY_TO_MENU_OFFSET, &pImpl->copyLabelBuffer[0]);
     InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + MOVE_TO_MENU_OFFSET, &pImpl->moveLabelBuffer[0]);
 
-    return MAKE_HRESULT(SEVERITY_SUCCESS, 0, (MOVE_TO_MENU_OFFSET + 1)); //shouldn't this be +idCmdFirst?
+    OutputDebugStringW(L"QueryContextMenu");
+
+    return MAKE_HRESULT(SEVERITY_SUCCESS, 0, MOVE_TO_MENU_OFFSET + 1); //shouldn't this be +idCmdFirst?
 }
 
 
