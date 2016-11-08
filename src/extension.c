@@ -26,6 +26,8 @@ struct tag_IMyObj;
 typedef struct tag_MyIContextMenuImpl {
     IContextMenuVtbl* lpVtbl;
     struct tag_IMyObj* pBase;
+    u16 copyLabelBuffer[20 + (sizeof(L"COPY ")/sizeof(L' ')) + (sizeof(L" items to...")/sizeof(L' ')) + 1];
+    u16 moveLabelBuffer[20 + (sizeof(L"MOVE ")/sizeof(L' ')) + (sizeof(L" items to...")/sizeof(L' ')) + 1];
 } MyIContextMenuImpl;
 
 typedef struct tag_MyIShellExtInitImpl {
@@ -129,17 +131,6 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(MyIContextMenuImpl
 #define COPY_TO_MENU_OFFSET 1
 #define MOVE_TO_MENU_OFFSET 2
 
-UINT_PTR CALLBACK OFNHookProc(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lParam){
-    if (uiMsg == WM_NOTIFY){
-        OFNOTIFYW* pNotify = (OFNOTIFYW*)lParam;
-        if (pNotify->hdr.code == CDN_FILEOK){
-            return 0;
-        }
-    }
-    return 1;
-}
-
-
 static void cleanup_names_storage(IMyObj* pBase){
     if (pBase->itemNames != NULL){
         GlobalFree(pBase->itemNames);
@@ -209,7 +200,6 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
                     if (SUCCEEDED(hr)){
                         SecureZeroMemory(targetDir, sizeof(targetDir));
                         lstrcpyW(&targetDir[0], pszPath);
-                        //StringCchCopy(targetDir, sizeof(targetDir)/sizeof(targetDir[0]), pszPath);
                         CoTaskMemFree(pszPath);
 
                         SHFILEOPSTRUCT shFileOp = {
@@ -236,31 +226,88 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
     return S_OK;
 }
 
+//returns number of digits in the number
+uint u64toW(uint number, u16 stringBuffer[20]){
+    const static u16 DIGITS[10] = L"0123456789";
+    if (number == 0){ //special case
+        *stringBuffer = L'0';
+        return 1;
+    }
+
+    //biggest 64 bit unsigned number is 18,446,744,073,709,551,615 that is 20 digits, so
+    uint divisor = 10;
+    int power = 0;
+    char reminders[20] = {0};
+    OutputDebugStringW(L"reminding");
+    u16 foo[2] = L" \0";
+    for (; power < 20; power += 1){
+        char reminder = number % divisor;
+        foo[0] = DIGITS[reminder];
+        OutputDebugStringW(&foo[0]);
+
+        reminders[power] = reminder;
+        number = number / divisor;
+
+        if (number == 0){
+            break;
+        }
+    }
+
+    OutputDebugStringW(L"printing");
+    //put 'em digits in correct order
+    for (int i = power; i >= 0; i -= 1){
+        stringBuffer[power - i] = DIGITS[reminders[i]];
+    }
+
+    return power;
+}
+
+void mk_label (u16* prefix, uint number, u16* buffer){
+    uint index = 0;
+    while (prefix[index] != 0){
+        buffer[index] = prefix[index];
+        index += 1;
+    }
+    OutputDebugStringW(L"u64ToW");
+    uint nDigits = u64toW(number, buffer + index);
+    index += nDigits;
+
+    lstrcpyW(buffer + index + 1, number > 1 ? L" items to..." : L" item to...");
+    OutputDebugStringW(buffer);
+}
+
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl* pImpl, 
                                                            HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags){
+
+    IMyObj* pBase = pImpl->pBase;
+    
     if (CMF_DEFAULTONLY == (CMF_DEFAULTONLY & uFlags)
         || CMF_VERBSONLY == (CMF_VERBSONLY & uFlags)
         || CMF_NOVERBS == (CMF_NOVERBS & uFlags)){
+
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
     }
 
     //in highly unlikely case where is no room left in the menu:
     if (idCmdFirst + 2 > idCmdLast){
         //we don't add any menu enries of ours
-        //TODO: free memory for names? since we don't even display our menu items
+        cleanup_names_storage(pBase);
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
     }
 
-    //TODO: it might be wiser to extract filenames here
+    OutputDebugStringW(pBase->nItems > 16 ? L"OVER 16!" : L"<= 16");
+
+
+    SecureZeroMemory(pImpl->copyLabelBuffer, sizeof(pImpl->copyLabelBuffer));
+    mk_label(L"COPY ", pBase->nItems, &pImpl->copyLabelBuffer[0]);
+
+    SecureZeroMemory(pImpl->moveLabelBuffer, sizeof(pImpl->moveLabelBuffer));
+    mk_label(L"MOVE ", pBase->nItems, &pImpl->moveLabelBuffer[0]);
 
     //insert our menu items: separator, copy and move in that order.
     InsertMenu(hmenu, -1, MF_BYPOSITION | MF_SEPARATOR, idCmdFirst + 0, NULL);
-    
-    u16* copyMenuItemText = pImpl->pBase->nItems > 1 ? L"COPY Selected Items To..." : L"COPY Selected Item To...";
-    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + COPY_TO_MENU_OFFSET, copyMenuItemText);
-
-    u16* moveMenuItemText = pImpl->pBase->nItems > 1 ? L"MOVE Selected Items To..." : L"MOVE Selected Item To...";
-    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + MOVE_TO_MENU_OFFSET, moveMenuItemText);
+    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + COPY_TO_MENU_OFFSET, &pImpl->copyLabelBuffer[0]);
+    InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + MOVE_TO_MENU_OFFSET, &pImpl->moveLabelBuffer[0]);
 
     return MAKE_HRESULT(SEVERITY_SUCCESS, 0, (MOVE_TO_MENU_OFFSET + 1)); //shouldn't this be +idCmdFirst?
 }
