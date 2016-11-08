@@ -238,9 +238,9 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
 
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl* pImpl, 
                                                            HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags){
-    if (CMF_DEFAULTONLY == (CMF_DEFAULTONLY & uFlags)){
-        //show only default menu items, so, non of ours
-        //TODO: free memory for names? since we don't even display our menu items
+    if (CMF_DEFAULTONLY == (CMF_DEFAULTONLY & uFlags)
+        || CMF_VERBSONLY == (CMF_VERBSONLY & uFlags)
+        || CMF_NOVERBS == (CMF_NOVERBS & uFlags)){
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
     }
 
