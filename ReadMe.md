@@ -2,4 +2,4 @@ This Windows Explorer extension adds "Copy To" and "Move To" to the end of a she
 
 Run installer.exe to install or uninstall the extension.
 
-Requires Windows 7 and up.
+Requires 64bit OS, Windows 7 and up.
