@@ -14,6 +14,9 @@ typedef intmax_t sint;
 typedef USHORT u16;
 typedef unsigned char u8;
 
+//#define ODS(x) OutputDebugStringW(x)
+#define ODS(x) (void)0
+
 /* GLOBALS */
 #include "common.c"
 
@@ -58,16 +61,38 @@ static void cleanup_names_storage(IMyObj* pBase){
 static const u16* COPY_VERB = SERVER_GUID_TEXT L".COPY";
 static const u16* MOVE_VERB = SERVER_GUID_TEXT L".MOVE";
 
-HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(MyIContextMenuImpl* pImpl, 
-                                                              UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR pszName,UINT cchMax){
-    //not really in use since Vista and we don't provide canonical verbs
-    OutputDebugStringW(L"GetCommandString");
-    return E_FAIL;
-    //    return S_OK;
-}
-
 #define COPY_TO_MENU_OFFSET 1
 #define MOVE_TO_MENU_OFFSET 2
+
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(MyIContextMenuImpl* pImpl, 
+                                                              UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR pszName,UINT cchMax){
+    if (uFlags == GCS_VERBW){
+        switch (idCmd){
+            case COPY_TO_MENU_OFFSET:{
+                lstrcpyW((u16*)pszName, COPY_VERB);
+                ODS(L"GetCommandString SUCCESS (copy verb)");
+                return S_OK;
+            } break;
+
+            case MOVE_TO_MENU_OFFSET:{
+                lstrcpyW((u16*)pszName, MOVE_VERB);
+                ODS(L"GetCommandString SUCCESS (move verb)");
+                return S_OK;
+            } break;
+
+        }
+    } else if (uFlags == GCS_VALIDATEW){
+        if (idCmd == COPY_TO_MENU_OFFSET || idCmd == MOVE_TO_MENU_OFFSET){
+            ODS(L"GetCommandString SUCCESS (validate cmd)");
+            return S_OK;
+        } else {
+            ODS(L"GetCommandString UNKNOWN CMD VALIDATION");
+            return S_FALSE;
+        }
+    }
+    ODS(L"GetCommandString FAILED");
+    return E_INVALIDARG;
+}
 
 //returns number of digits in the number
 static uint u64toW(uint number, u16 stringBuffer[20]){
@@ -119,21 +144,22 @@ static u16 targetDir[MAX_UNICODE_PATH_LENGTH + 2]; //extra 1 for trailing zero
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFO pCommandInfo){
     IMyObj* pBase = pImpl->pBase;
     
-    OutputDebugStringW(L"FOO");
+    ODS(L"FOO");
 
     if (pBase->nItems == 0){
         return S_OK; //instantly copy or move nothing!
     }
-    OutputDebugStringW(L"BAR");
+    ODS(L"BAR");
 
-    const char* pVerb = pCommandInfo->lpVerb;
+    void* pVerb = pCommandInfo->lpVerb;
 
-    if (! IS_INTRESOURCE(pVerb)){
-        cleanup_names_storage(pBase);
-        return E_FAIL;
+    if (HIWORD(pVerb)){
+        ODS(L"VERB");
+        return E_INVALIDARG;
     }
-    OutputDebugStringW(L"BAZ");
-    
+
+    ODS(L"BAZ");
+
     u16 title[(sizeof(L"COPY ")/sizeof(L' ')) + 20 + (sizeof(L" items to...")/sizeof(L' ')) + 1];
     SecureZeroMemory(&title[0], sizeof(title));    
     uint fileOp;
@@ -145,18 +171,19 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
         mk_label(L"MOVE ", pBase->nItems, &title[0]);
         fileOp = FO_MOVE;
     } else {
+        ODS(L"Neither COPY nor MOVE offset");
         cleanup_names_storage(pBase);
         return E_FAIL;
     }
 
-    OutputDebugStringW(L"BAZ+");
+    ODS(L"BAZ+");
     //I want my monads in C!
     HRESULT hr = S_OK; 
     // Create a new common open file dialog.
     IFileOpenDialog *pfd = NULL;
     hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void**)&pfd);
     if (SUCCEEDED(hr)){
-        OutputDebugStringW(L"BAZ++");
+        ODS(L"BAZ++");
         // Set the dialog as a folder picker.
         DWORD dwOptions;
         hr = pfd->lpVtbl->GetOptions(pfd, &dwOptions);
@@ -200,13 +227,10 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
                     }
                 }
             }
-
         }
-
+        pfd->lpVtbl->Release(pfd);        
     }
 
-
-    pfd->lpVtbl->Release(pfd);
     cleanup_names_storage(pBase);
     return S_OK;
 }
@@ -235,7 +259,7 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl
     InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + COPY_TO_MENU_OFFSET, L"Copy To...");
     InsertMenu(hmenu, -1, MF_BYPOSITION | MF_STRING, idCmdFirst + MOVE_TO_MENU_OFFSET, L"Move To...");
 
-    OutputDebugStringW(L"QueryContextMenu");
+    ODS(L"QueryContextMenu");
 
     return MAKE_HRESULT(SEVERITY_SUCCESS, 0, MOVE_TO_MENU_OFFSET + 1); //shouldn't this be +idCmdFirst?
 }
@@ -338,7 +362,7 @@ HRESULT STDMETHODCALLTYPE myIShellExtInit_Initialize(MyIShellExtInitImpl* pImpl,
         ReleaseStgMedium(&medium);
     }
 
-    OutputDebugStringW(L"Initialize success");
+    ODS(L"Initialize success");
 
     return S_OK;
 }

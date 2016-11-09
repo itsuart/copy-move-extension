@@ -138,22 +138,24 @@ static bool register_shell_extension(){
     return true;
 };
 
-static void unregister_shell_extension(){
+static bool unregister_shell_extension(){
     long errorCode = RegDeleteTreeW(
            HKEY_CLASSES_ROOT,
            L"AllFileSystemObjects\\ShellEx\\ContextMenuHandlers\\" SERVER_GUID_TEXT);
     if (errorCode != ERROR_SUCCESS){
         display_error(errorCode);
+        return false;
     }
+    return true;
 }
 
-static void uninstall_extension(){
-    inform(L"uninstall");
+static bool uninstall_extension(){
     long errorCode = RegDeleteTreeW(HKEY_CLASSES_ROOT, L"CLSID\\" SERVER_GUID_TEXT);
     if (errorCode != ERROR_SUCCESS){
         display_error(errorCode);
+        return false;
     }
-    unregister_shell_extension();
+    return unregister_shell_extension();
 }
 
 static void install_extension(u16* server_path){
@@ -261,7 +263,9 @@ void entry_point(){
            } break;
                
            case L'u':{
-               uninstall_extension();
+               if (uninstall_extension()){
+                   inform(L"The extension was unregistered, but some applications might still use it. You should be able to remove files after reboot.");
+               };
            } break;
                
            default:{
