@@ -158,12 +158,11 @@ static bool uninstall_extension(){
     return unregister_shell_extension();
 }
 
-static void install_extension(u16* server_path){
-    inform(server_path);
+static bool install_extension(u16* server_path){
     if (register_com_server(server_path, lstrlenW(server_path))){
-        register_shell_extension();
+        return register_shell_extension();
     };
-
+    return false;
 }
 
 static bool is_extension_installed(){
@@ -177,7 +176,7 @@ static bool is_extension_installed(){
     result = CoCreateInstance(&SERVER_GUID, NULL, CLSCTX_INPROC_SERVER, &IID_IUnknown, (void**)&pIUnknown);
     switch (result){
         case REGDB_E_CLASSNOTREG:{
-            error(L"REGDB_E_CLASSNOTREG");
+            return false;
         } break;
 
         case CLASS_E_NOAGGREGATION:{
@@ -202,7 +201,6 @@ static bool is_extension_installed(){
         } break;
 
         default:{
-
             u16 alphabet[16] = L"0123456789ABCDEF";
             u16 errorCode[2*sizeof(HRESULT) + 10] = {0};
             for (int i = sizeof(HRESULT); i >= 0 ; i-= 1){
@@ -259,7 +257,9 @@ void entry_point(){
                uint length = remove_last_part_from_path(processFullPath, processFullPathLength);
                CopyMemory(processFullPath + length, extension_name, sizeof(extension_name));
 
-               install_extension(processFullPath);
+               if (install_extension(processFullPath)){
+                   inform(L"Extension was registered successfuly.");
+               };
            } break;
                
            case L'u':{
