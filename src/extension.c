@@ -263,7 +263,7 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
             .wFunc = fileOp,
             .pFrom = pBase->itemNames,
             .pTo = &targetDir[0],
-            .fFlags = FOF_ALLOWUNDO | FOF_RENAMEONCOLLISION,
+            .fFlags = FOF_ALLOWUNDO,
             .fAnyOperationsAborted = false,
             .hNameMappings = NULL,
             .lpszProgressTitle = L"ERROR!"
@@ -271,9 +271,6 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
 
         SHFileOperationW(&shFileOp);
     }
-
-    ODS(L"BAZ+");
-    //I want my monads in C!
 
     cleanup_names_storage(pBase);
     return S_OK;
