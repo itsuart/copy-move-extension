@@ -161,7 +161,6 @@ static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* startFo
                 hr = pfd->lpVtbl->SetTitle(pfd, title);
 
                 if (NULL != startFolder){
-                    COM_CALL(pfd, SetFileName, startFolder);
                     IShellItem* startShellItem;
                     if (SUCCEEDED(SHCreateItemFromParsingName(startFolder, NULL, &IID_IShellItem, &startShellItem))){
                         COM_CALL(pfd, SetFolder, startShellItem);
