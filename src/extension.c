@@ -64,7 +64,7 @@ static const u16* MOVE_VERB = SERVER_GUID_TEXT L".MOVE";
 #define COPY_TO_MENU_OFFSET 1
 #define MOVE_TO_MENU_OFFSET 2
 
-HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(MyIContextMenuImpl* pImpl, 
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_GetCommandString(MyIContextMenuImpl* pImpl,
                                                               UINT_PTR idCmd, UINT uFlags, UINT* pwReserved,LPSTR pszName,UINT cchMax){
     if (uFlags == GCS_VERBW){
         switch (idCmd){
@@ -138,47 +138,10 @@ static void mk_label (u16* prefix, uint number, u16* buffer){
     lstrcpyW(buffer + index + 1, number > 1 ? L" items to..." : L" item to...");
 }
 
+static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* pTargetFolder){
+    bool succeeded = false;
 
-//I really hate person that causes me "undefined reference to `___chkstk_ms'" errors. And extra calls to clear the memory.
-static u16 targetDir[MAX_UNICODE_PATH_LENGTH + 2]; //extra 1 for trailing zero
-HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFO pCommandInfo){
-    IMyObj* pBase = pImpl->pBase;
-    
-    ODS(L"FOO");
-
-    if (pBase->nItems == 0){
-        return S_OK; //instantly copy or move nothing!
-    }
-    ODS(L"BAR");
-
-    void* pVerb = pCommandInfo->lpVerb;
-
-    if (HIWORD(pVerb)){
-        ODS(L"VERB");
-        return E_INVALIDARG;
-    }
-
-    ODS(L"BAZ");
-
-    u16 title[(sizeof(L"COPY ")/sizeof(L' ')) + 20 + (sizeof(L" items to...")/sizeof(L' ')) + 1];
-    SecureZeroMemory(&title[0], sizeof(title));    
-    uint fileOp;
-
-    if ((void*)pVerb == (void*)MAKEINTRESOURCE(COPY_TO_MENU_OFFSET)){
-        mk_label(L"COPY ", pBase->nItems, &title[0]);
-        fileOp = FO_COPY;
-    } else if ((void*)pVerb == (void*)MAKEINTRESOURCE(MOVE_TO_MENU_OFFSET)){
-        mk_label(L"MOVE ", pBase->nItems, &title[0]);
-        fileOp = FO_MOVE;
-    } else {
-        ODS(L"Neither COPY nor MOVE offset");
-        cleanup_names_storage(pBase);
-        return E_FAIL;
-    }
-
-    ODS(L"BAZ+");
-    //I want my monads in C!
-    HRESULT hr = S_OK; 
+    HRESULT hr = S_OK;
     // Create a new common open file dialog.
     IFileOpenDialog *pfd = NULL;
     hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void**)&pfd);
@@ -192,11 +155,11 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
 
             // Set the title of the dialog.
             if (SUCCEEDED(hr)){
-                hr = pfd->lpVtbl->SetTitle(pfd, &title[0]);
+                hr = pfd->lpVtbl->SetTitle(pfd, title);
 
                 // Show the open file dialog.
                 if (SUCCEEDED(hr)){
-                    hr = pfd->lpVtbl->Show(pfd, pCommandInfo->hwnd);
+                    hr = pfd->lpVtbl->Show(pfd, ownerWnd);
                     if (SUCCEEDED(hr)){
                         // Get the selection from the user.
                         IShellItem *psiResult = NULL;
@@ -205,22 +168,9 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
                             u16* pszPath = NULL;
                             hr = psiResult->lpVtbl->GetDisplayName(psiResult, SIGDN_FILESYSPATH, &pszPath);
                             if (SUCCEEDED(hr)){
-                                SecureZeroMemory(targetDir, sizeof(targetDir));
-                                lstrcpyW(&targetDir[0], pszPath);
+                                lstrcpyW(pTargetFolder, pszPath);
                                 CoTaskMemFree(pszPath);
-
-                                SHFILEOPSTRUCT shFileOp = {
-                                    .hwnd = pCommandInfo->hwnd,
-                                    .wFunc = fileOp,
-                                    .pFrom = pBase->itemNames,
-                                    .pTo = &targetDir[0],
-                                    .fFlags = FOF_ALLOWUNDO,
-                                    .fAnyOperationsAborted = false,
-                                    .hNameMappings = NULL,
-                                    .lpszProgressTitle = L"ERROR!"
-                                };
-
-                                SHFileOperation(&shFileOp);                        
+                                succeeded = true;
                             }
                             psiResult->lpVtbl->Release(psiResult);
                         }
@@ -228,18 +178,77 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
                 }
             }
         }
-        pfd->lpVtbl->Release(pfd);        
+        pfd->lpVtbl->Release(pfd);
     }
+
+    return succeeded;
+}
+
+//I really hate person that causes me "undefined reference to `___chkstk_ms'" errors. And extra calls to clear the memory.
+static u16 targetDir[MAX_UNICODE_PATH_LENGTH + 2]; //extra 1 for trailing zero
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFO pCommandInfo){
+    IMyObj* pBase = pImpl->pBase;
+
+    ODS(L"FOO");
+
+    if (pBase->nItems == 0){
+        return S_OK; //instantly copy or move nothing!
+    }
+    ODS(L"BAR");
+
+    const void* pVerb = pCommandInfo->lpVerb;
+
+    if (HIWORD(pVerb)){
+        ODS(L"VERB");
+        return E_INVALIDARG;
+    }
+
+    ODS(L"BAZ");
+
+    u16 title[(sizeof(L"COPY ")/sizeof(L' ')) + 20 + (sizeof(L" items to...")/sizeof(L' ')) + 1];
+    SecureZeroMemory(&title[0], sizeof(title));
+    uint fileOp;
+
+    if (pVerb == (void*)MAKEINTRESOURCE(COPY_TO_MENU_OFFSET)){
+        mk_label(L"COPY ", pBase->nItems, &title[0]);
+        fileOp = FO_COPY;
+    } else if (pVerb == (void*)MAKEINTRESOURCE(MOVE_TO_MENU_OFFSET)){
+        mk_label(L"MOVE ", pBase->nItems, &title[0]);
+        fileOp = FO_MOVE;
+    } else {
+        ODS(L"Neither COPY nor MOVE offset");
+        cleanup_names_storage(pBase);
+        return E_FAIL;
+    }
+
+    SecureZeroMemory(targetDir, sizeof(targetDir));
+    if (query_user_for_target_folder(pCommandInfo->hwnd, title, &targetDir[0])){
+        SHFILEOPSTRUCT shFileOp = {
+            .hwnd = pCommandInfo->hwnd,
+            .wFunc = fileOp,
+            .pFrom = pBase->itemNames,
+            .pTo = &targetDir[0],
+            .fFlags = FOF_ALLOWUNDO | FOF_RENAMEONCOLLISION,
+            .fAnyOperationsAborted = false,
+            .hNameMappings = NULL,
+            .lpszProgressTitle = L"ERROR!"
+        };
+
+        SHFileOperationW(&shFileOp);
+    }
+
+    ODS(L"BAZ+");
+    //I want my monads in C!
 
     cleanup_names_storage(pBase);
     return S_OK;
 }
 
 
-HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl* pImpl, 
+HRESULT STDMETHODCALLTYPE myIContextMenuImpl_QueryContextMenu(MyIContextMenuImpl* pImpl,
                                                            HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags){
     IMyObj* pBase = pImpl->pBase;
-    
+
     if (CMF_DEFAULTONLY == (CMF_DEFAULTONLY & uFlags)
         || CMF_VERBSONLY == (CMF_VERBSONLY & uFlags)
         || CMF_NOVERBS == (CMF_NOVERBS & uFlags)){
@@ -456,7 +465,7 @@ HRESULT STDMETHODCALLTYPE classCreateInstance(IClassFactory* pClassFactory, IUnk
        return CLASS_E_NOAGGREGATION;
    }
 
-   if (IsEqualGUID(pRequestedIID, &IID_IUnknown) 
+   if (IsEqualGUID(pRequestedIID, &IID_IUnknown)
        || IsEqualGUID(pRequestedIID, &IID_IContextMenu)
        || IsEqualGUID(pRequestedIID, &IID_IShellExtInit)
        ){
@@ -464,7 +473,7 @@ HRESULT STDMETHODCALLTYPE classCreateInstance(IClassFactory* pClassFactory, IUnk
        if (pMyObj == NULL){
            return E_OUTOFMEMORY;
        }
-   
+
        pMyObj->lpVtbl = &IMyObjVtbl;
 
        pMyObj->contextMenuImpl.lpVtbl = &IMyIContextMenuVtbl;
@@ -501,7 +510,7 @@ HRESULT STDMETHODCALLTYPE classLockServer(IClassFactory* pClassFactory, BOOL flo
 
 HRESULT STDMETHODCALLTYPE classQueryInterface(IClassFactory* pClassFactory, REFIID requestedIID, void **ppv){
    // Check if the GUID matches an IClassFactory or IUnknown GUID.
-   if (! IsEqualGUID(requestedIID, &IID_IUnknown) && 
+   if (! IsEqualGUID(requestedIID, &IID_IUnknown) &&
        ! IsEqualGUID(requestedIID, &IID_IClassFactory)){
       // It doesn't. Clear his handle, and return E_NOINTERFACE.
       *ppv = 0;
