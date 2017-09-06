@@ -17,6 +17,9 @@ typedef unsigned char u8;
 //#define ODS(x) OutputDebugStringW(x)
 #define ODS(x) (void)0
 
+#define COM_CALL(x, y, ...) x->lpVtbl->y(x, __VA_ARGS__)
+#define COM_CALL0(x, y) x->lpVtbl->y(x)
+
 /* GLOBALS */
 #include "common.c"
 
@@ -138,7 +141,7 @@ static void mk_label (u16* prefix, uint number, u16* buffer){
     lstrcpyW(buffer + index + 1, number > 1 ? L" items to..." : L" item to...");
 }
 
-static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* pTargetFolder){
+static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* startFolder, u16* pTargetFolder){
     bool succeeded = false;
 
     HRESULT hr = S_OK;
@@ -151,11 +154,21 @@ static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* pTarget
         DWORD dwOptions;
         hr = pfd->lpVtbl->GetOptions(pfd, &dwOptions);
         if (SUCCEEDED(hr)){
-            hr = pfd->lpVtbl->SetOptions(pfd, dwOptions | FOS_PICKFOLDERS);
+            hr = pfd->lpVtbl->SetOptions(pfd, dwOptions | FOS_PICKFOLDERS | FOS_CREATEPROMPT);
 
             // Set the title of the dialog.
             if (SUCCEEDED(hr)){
                 hr = pfd->lpVtbl->SetTitle(pfd, title);
+
+                if (NULL != startFolder){
+                    COM_CALL(pfd, SetFileName, startFolder);
+                    IShellItem* startShellItem;
+                    if (SUCCEEDED(SHCreateItemFromParsingName(startFolder, NULL, &IID_IShellItem, &startShellItem))){
+                        COM_CALL(pfd, SetFolder, startShellItem);
+                        COM_CALL0(startShellItem, Release);
+                    }
+                }
+
 
                 // Show the open file dialog.
                 if (SUCCEEDED(hr)){
@@ -167,11 +180,15 @@ static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* pTarget
                         if (SUCCEEDED(hr)){
                             u16* pszPath = NULL;
                             hr = psiResult->lpVtbl->GetDisplayName(psiResult, SIGDN_FILESYSPATH, &pszPath);
+
                             if (SUCCEEDED(hr)){
                                 lstrcpyW(pTargetFolder, pszPath);
                                 CoTaskMemFree(pszPath);
+
                                 succeeded = true;
+
                             }
+
                             psiResult->lpVtbl->Release(psiResult);
                         }
                     }
@@ -186,6 +203,8 @@ static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* pTarget
 
 //I really hate person that causes me "undefined reference to `___chkstk_ms'" errors. And extra calls to clear the memory.
 static u16 targetDir[MAX_UNICODE_PATH_LENGTH + 2]; //extra 1 for trailing zero
+static u16 startDirContainer[MAX_UNICODE_PATH_LENGTH + 1];
+
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFO pCommandInfo){
     IMyObj* pBase = pImpl->pBase;
 
@@ -221,8 +240,25 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
         return E_FAIL;
     }
 
+    uint lastSlashPos = 0;
+    startDirContainer[sizeof(startDirContainer) / sizeof(startDirContainer[0]) - 1] = 0;
+    for (uint i = 0; i < MAX_UNICODE_PATH_LENGTH; i += 1){
+        u16 ch = pBase->itemNames[i];
+
+        if (ch == L'\\') {
+            lastSlashPos = i;
+        }
+
+        startDirContainer[i] = ch;
+
+        if (ch == 0) {
+            startDirContainer[lastSlashPos] = 0;
+            break;
+        }
+    }
+
     SecureZeroMemory(targetDir, sizeof(targetDir));
-    if (query_user_for_target_folder(pCommandInfo->hwnd, title, &targetDir[0])){
+    if (query_user_for_target_folder(pCommandInfo->hwnd, title, startDirContainer, &targetDir[0])){
         SHFILEOPSTRUCT shFileOp = {
             .hwnd = pCommandInfo->hwnd,
             .wFunc = fileOp,
