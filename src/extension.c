@@ -1,5 +1,6 @@
 #define _WIN32_WINNT _WIN32_WINNT_WIN7
 #define UNICODE
+#define STRICT_TYPED_ITEMIDS    // Better type safety for IDLists
 
 #include <windows.h>
 #include <tchar.h>
@@ -141,7 +142,11 @@ static void mk_label (u16* prefix, uint number, u16* buffer){
     lstrcpyW(buffer + index + 1, number > 1 ? L" items to..." : L" item to...");
 }
 
-static bool query_user_for_target_file_path(HWND ownerWnd, u16* sourceFilePath, u16* pTargetPath){
+static const DWORD ID_OPEN_TARGET_DIRECTORY = 1000;
+
+static bool query_user_for_target_file_path(HWND ownerWnd, u16* sourceFilePath, u16* pTargetPath, int* pOpenTargetFolder){
+    *pOpenTargetFolder = false;
+
     IShellItem* sourceItem = NULL;
     if (! SUCCEEDED(SHCreateItemFromParsingName(sourceFilePath, NULL, &IID_IShellItem, (void**)&sourceItem))){
         return false;
@@ -164,27 +169,37 @@ static bool query_user_for_target_file_path(HWND ownerWnd, u16* sourceFilePath, 
 
         hr = COM_CALL(pfd, SetSaveAsItem, sourceItem);
 
-        // Show the save file dialog.
+        IFileDialogCustomize* customizer = NULL;
+        hr = COM_CALL(pfd, QueryInterface, &IID_IFileDialogCustomize, (void**)&customizer);
         if (SUCCEEDED(hr)){
-            hr = COM_CALL(pfd, Show, ownerWnd);
+            COM_CALL(customizer, AddCheckButton, ID_OPEN_TARGET_DIRECTORY, L"Open target folder", FALSE);
+
+            // Show the save file dialog.
             if (SUCCEEDED(hr)){
-                // Get the selection from the user.
-                IShellItem* psiResult = NULL;
-                hr = COM_CALL(pfd, GetResult, &psiResult);
+                hr = COM_CALL(pfd, Show, ownerWnd);
                 if (SUCCEEDED(hr)){
-                    u16* pszPath = NULL;
-                    hr = COM_CALL(psiResult, GetDisplayName, SIGDN_FILESYSPATH, &pszPath);
 
+                    COM_CALL(customizer, GetCheckButtonState, ID_OPEN_TARGET_DIRECTORY, pOpenTargetFolder);
+
+                    // Get the selection from the user.
+                    IShellItem* psiResult = NULL;
+                    hr = COM_CALL(pfd, GetResult, &psiResult);
                     if (SUCCEEDED(hr)){
-                        lstrcpyW(pTargetPath, pszPath);
-                        CoTaskMemFree(pszPath);
+                        u16* pszPath = NULL;
+                        hr = COM_CALL(psiResult, GetDisplayName, SIGDN_FILESYSPATH, &pszPath);
 
-                        succeeded = true;
+                        if (SUCCEEDED(hr)){
+                            lstrcpyW(pTargetPath, pszPath);
+                            CoTaskMemFree(pszPath);
 
+                            succeeded = true;
+
+                        }
+                        COM_CALL0(psiResult, Release);
                     }
-                    COM_CALL0(psiResult, Release);
                 }
             }
+            COM_CALL0(customizer, Release);
         }
         COM_CALL0(pfd, Release);
     }
@@ -192,12 +207,13 @@ static bool query_user_for_target_file_path(HWND ownerWnd, u16* sourceFilePath, 
 
     return succeeded;
 }
-static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* startFolder, u16* pTargetFolder){
+static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* startFolder, u16* pTargetFolder, int* pOpenTargetFolder){
     bool succeeded = false;
+    *pOpenTargetFolder = false;
 
     HRESULT hr = S_OK;
     // Create a new common open file dialog.
-    IFileOpenDialog *pfd = NULL;
+    IFileOpenDialog* pfd = NULL;
     hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void**)&pfd);
     if (SUCCEEDED(hr)){
         {
@@ -209,42 +225,52 @@ static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* startFo
             }
         }
 
-
-        // Set the title of the dialog.
+        IFileDialogCustomize* customizer = NULL;
+        hr = COM_CALL(pfd, QueryInterface, &IID_IFileDialogCustomize, (void**)&customizer);
         if (SUCCEEDED(hr)){
-            hr = COM_CALL(pfd, SetTitle, title);
+            COM_CALL(customizer, AddCheckButton, ID_OPEN_TARGET_DIRECTORY, L"Open target folder", FALSE);
 
-            if (NULL != startFolder){
-                IShellItem* startShellItem;
-                if (SUCCEEDED(SHCreateItemFromParsingName(startFolder, NULL, &IID_IShellItem, (void**)&startShellItem))){
-                    COM_CALL(pfd, SetFolder, startShellItem);
-                    COM_CALL0(startShellItem, Release);
-                } //we don't really care if we fail to set starting folder
-            }
-
-            // Show the folder picker.
+            // Set the title of the dialog.
             if (SUCCEEDED(hr)){
-                hr = COM_CALL(pfd, Show, ownerWnd);
+                hr = COM_CALL(pfd, SetTitle, title);
+
+                if (NULL != startFolder){
+                    IShellItem* startShellItem;
+                    if (SUCCEEDED(SHCreateItemFromParsingName(startFolder, NULL, &IID_IShellItem, (void**)&startShellItem))){
+                        COM_CALL(pfd, SetFolder, startShellItem);
+                        COM_CALL0(startShellItem, Release);
+                    } //we don't really care if we fail to set starting folder
+                }
+
+                // Show the folder picker.
                 if (SUCCEEDED(hr)){
-                    // Get the selection from the user.
-                    IShellItem* psiResult = NULL;
-                    hr = COM_CALL(pfd, GetResult, &psiResult);
+                    hr = COM_CALL(pfd, Show, ownerWnd);
                     if (SUCCEEDED(hr)){
-                        u16* pszPath = NULL;
-                        hr = COM_CALL(psiResult, GetDisplayName, SIGDN_FILESYSPATH, &pszPath);
+                        COM_CALL(customizer, GetCheckButtonState, ID_OPEN_TARGET_DIRECTORY, pOpenTargetFolder);
+
+                        // Get the selection from the user.
+                        IShellItem* psiResult = NULL;
+                        hr = COM_CALL(pfd, GetResult, &psiResult);
                         if (SUCCEEDED(hr)){
-                            lstrcpyW(pTargetFolder, pszPath);
-                            CoTaskMemFree(pszPath);
+                            u16* pszPath = NULL;
+                            hr = COM_CALL(psiResult, GetDisplayName, SIGDN_FILESYSPATH, &pszPath);
+                            if (SUCCEEDED(hr)){
+                                lstrcpyW(pTargetFolder, pszPath);
+                                CoTaskMemFree(pszPath);
 
-                            succeeded = true;
+                                succeeded = true;
 
+                            }
+
+                            COM_CALL0(psiResult, Release);
                         }
-
-                        COM_CALL0(psiResult, Release);
                     }
                 }
             }
         }
+
+
+        COM_CALL0(customizer, Release);
         COM_CALL0(pfd, Release);
     }
 
@@ -304,13 +330,15 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
 
     SecureZeroMemory(targetDir, sizeof(targetDir));
 
+    const bool operating_on_single_file = pBase->nItems == 1 && (0 == (FILE_ATTRIBUTE_DIRECTORY & GetFileAttributesW(pBase->itemNames)));
+    int open_target_folder = 0;
     bool target_directory_acquired  = false;
 
     //Alright let us see if we have single file to process (actually we have to check that it is NOT DIRECTORY)
-    if (pBase->nItems == 1 && (0 == (FILE_ATTRIBUTE_DIRECTORY & GetFileAttributesW(pBase->itemNames)))){
-        target_directory_acquired = query_user_for_target_file_path(pCommandInfo->hwnd, pBase->itemNames, &targetDir[0]);
+    if (operating_on_single_file){
+        target_directory_acquired = query_user_for_target_file_path(pCommandInfo->hwnd, pBase->itemNames, &targetDir[0], &open_target_folder);
     } else {
-        target_directory_acquired = query_user_for_target_folder(pCommandInfo->hwnd, title, startDirContainer, &targetDir[0]);
+        target_directory_acquired = query_user_for_target_folder(pCommandInfo->hwnd, title, startDirContainer, &targetDir[0], &open_target_folder);
     }
 
 
@@ -326,7 +354,15 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
             .lpszProgressTitle = L"ERROR!"
         };
 
-        SHFileOperationW(&shFileOp);
+        if ( (0 == SHFileOperationW(&shFileOp)) && (! shFileOp.fAnyOperationsAborted) && open_target_folder){
+            if (operating_on_single_file){
+                PIDLIST_ABSOLUTE path = ILCreateFromPathW(targetDir); //I get it now - it will return null if file doesn't exist. That is why it works sometime.
+                SHOpenFolderAndSelectItems(path, 0, NULL, 0);
+                ILFree(path);
+            } else {
+                ShellExecuteW(NULL, L"explore", targetDir, NULL, NULL, SW_SHOWNORMAL);
+            }
+        }
     }
 
     cleanup_names_storage(pBase);
