@@ -141,6 +141,57 @@ static void mk_label (u16* prefix, uint number, u16* buffer){
     lstrcpyW(buffer + index + 1, number > 1 ? L" items to..." : L" item to...");
 }
 
+static bool query_user_for_target_file_path(HWND ownerWnd, u16* sourceFilePath, u16* pTargetPath){
+    IShellItem* sourceItem = NULL;
+    if (! SUCCEEDED(SHCreateItemFromParsingName(sourceFilePath, NULL, &IID_IShellItem, (void**)&sourceItem))){
+        return false;
+    }
+
+    bool succeeded = false;
+    HRESULT hr = S_OK;
+    // Create a new common save file dialog.
+    IFileSaveDialog *pfd = NULL;
+
+    hr = CoCreateInstance(&CLSID_FileSaveDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileSaveDialog, (void**)&pfd);
+    if (SUCCEEDED(hr)){
+        {
+            DWORD dwOptions;
+            hr = COM_CALL(pfd, GetOptions, &dwOptions);
+            if (SUCCEEDED(hr)){
+                hr = COM_CALL(pfd, SetOptions, dwOptions | FOS_CREATEPROMPT);
+            }
+        }
+
+        hr = COM_CALL(pfd, SetSaveAsItem, sourceItem);
+
+        // Show the save file dialog.
+        if (SUCCEEDED(hr)){
+            hr = COM_CALL(pfd, Show, ownerWnd);
+            if (SUCCEEDED(hr)){
+                // Get the selection from the user.
+                IShellItem* psiResult = NULL;
+                hr = COM_CALL(pfd, GetResult, &psiResult);
+                if (SUCCEEDED(hr)){
+                    u16* pszPath = NULL;
+                    hr = COM_CALL(psiResult, GetDisplayName, SIGDN_FILESYSPATH, &pszPath);
+
+                    if (SUCCEEDED(hr)){
+                        lstrcpyW(pTargetPath, pszPath);
+                        CoTaskMemFree(pszPath);
+
+                        succeeded = true;
+
+                    }
+                    COM_CALL0(psiResult, Release);
+                }
+            }
+        }
+        COM_CALL0(pfd, Release);
+    }
+    COM_CALL0(sourceItem, Release);
+
+    return succeeded;
+}
 static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* startFolder, u16* pTargetFolder){
     bool succeeded = false;
 
@@ -149,52 +200,52 @@ static bool query_user_for_target_folder(HWND ownerWnd, u16* title, u16* startFo
     IFileOpenDialog *pfd = NULL;
     hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void**)&pfd);
     if (SUCCEEDED(hr)){
-        ODS(L"BAZ++");
-        // Set the dialog as a folder picker.
-        DWORD dwOptions;
-        hr = pfd->lpVtbl->GetOptions(pfd, &dwOptions);
-        if (SUCCEEDED(hr)){
-            hr = pfd->lpVtbl->SetOptions(pfd, dwOptions | FOS_PICKFOLDERS | FOS_CREATEPROMPT);
-
-            // Set the title of the dialog.
+        {
+            // Set the dialog as a folder picker.
+            DWORD dwOptions;
+            hr = COM_CALL(pfd, GetOptions, &dwOptions);
             if (SUCCEEDED(hr)){
-                hr = pfd->lpVtbl->SetTitle(pfd, title);
-
-                if (NULL != startFolder){
-                    IShellItem* startShellItem;
-                    if (SUCCEEDED(SHCreateItemFromParsingName(startFolder, NULL, &IID_IShellItem, &startShellItem))){
-                        COM_CALL(pfd, SetFolder, startShellItem);
-                        COM_CALL0(startShellItem, Release);
-                    }
-                }
+                hr = COM_CALL(pfd, SetOptions, dwOptions | FOS_PICKFOLDERS | FOS_CREATEPROMPT);
+            }
+        }
 
 
-                // Show the open file dialog.
+        // Set the title of the dialog.
+        if (SUCCEEDED(hr)){
+            hr = COM_CALL(pfd, SetTitle, title);
+
+            if (NULL != startFolder){
+                IShellItem* startShellItem;
+                if (SUCCEEDED(SHCreateItemFromParsingName(startFolder, NULL, &IID_IShellItem, (void**)&startShellItem))){
+                    COM_CALL(pfd, SetFolder, startShellItem);
+                    COM_CALL0(startShellItem, Release);
+                } //we don't really care if we fail to set starting folder
+            }
+
+            // Show the folder picker.
+            if (SUCCEEDED(hr)){
+                hr = COM_CALL(pfd, Show, ownerWnd);
                 if (SUCCEEDED(hr)){
-                    hr = pfd->lpVtbl->Show(pfd, ownerWnd);
+                    // Get the selection from the user.
+                    IShellItem* psiResult = NULL;
+                    hr = COM_CALL(pfd, GetResult, &psiResult);
                     if (SUCCEEDED(hr)){
-                        // Get the selection from the user.
-                        IShellItem *psiResult = NULL;
-                        hr = pfd->lpVtbl->GetResult(pfd, &psiResult);
+                        u16* pszPath = NULL;
+                        hr = COM_CALL(psiResult, GetDisplayName, SIGDN_FILESYSPATH, &pszPath);
                         if (SUCCEEDED(hr)){
-                            u16* pszPath = NULL;
-                            hr = psiResult->lpVtbl->GetDisplayName(psiResult, SIGDN_FILESYSPATH, &pszPath);
+                            lstrcpyW(pTargetFolder, pszPath);
+                            CoTaskMemFree(pszPath);
 
-                            if (SUCCEEDED(hr)){
-                                lstrcpyW(pTargetFolder, pszPath);
-                                CoTaskMemFree(pszPath);
+                            succeeded = true;
 
-                                succeeded = true;
-
-                            }
-
-                            psiResult->lpVtbl->Release(psiResult);
                         }
+
+                        COM_CALL0(psiResult, Release);
                     }
                 }
             }
         }
-        pfd->lpVtbl->Release(pfd);
+        COM_CALL0(pfd, Release);
     }
 
     return succeeded;
@@ -207,21 +258,15 @@ static u16 startDirContainer[MAX_UNICODE_PATH_LENGTH + 1];
 HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* pImpl, LPCMINVOKECOMMANDINFO pCommandInfo){
     IMyObj* pBase = pImpl->pBase;
 
-    ODS(L"FOO");
-
     if (pBase->nItems == 0){
         return S_OK; //instantly copy or move nothing!
     }
-    ODS(L"BAR");
 
     const void* pVerb = pCommandInfo->lpVerb;
 
     if (HIWORD(pVerb)){
-        ODS(L"VERB");
         return E_INVALIDARG;
     }
-
-    ODS(L"BAZ");
 
     u16 title[(sizeof(L"COPY ")/sizeof(L' ')) + 20 + (sizeof(L" items to...")/sizeof(L' ')) + 1];
     SecureZeroMemory(&title[0], sizeof(title));
@@ -239,6 +284,7 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
         return E_FAIL;
     }
 
+    //NOTE: we assuming here that name of first item does NOT end with a BACKSLASH
     uint lastSlashPos = 0;
     startDirContainer[sizeof(startDirContainer) / sizeof(startDirContainer[0]) - 1] = 0;
     for (uint i = 0; i < MAX_UNICODE_PATH_LENGTH; i += 1){
@@ -257,7 +303,18 @@ HRESULT STDMETHODCALLTYPE myIContextMenuImpl_InvokeCommand(MyIContextMenuImpl* p
     }
 
     SecureZeroMemory(targetDir, sizeof(targetDir));
-    if (query_user_for_target_folder(pCommandInfo->hwnd, title, startDirContainer, &targetDir[0])){
+
+    bool target_directory_acquired  = false;
+
+    //Alright let us see if we have single file to process (actually we have to check that it is NOT DIRECTORY)
+    if (pBase->nItems == 1 && (0 == (FILE_ATTRIBUTE_DIRECTORY & GetFileAttributesW(pBase->itemNames)))){
+        target_directory_acquired = query_user_for_target_file_path(pCommandInfo->hwnd, pBase->itemNames, &targetDir[0]);
+    } else {
+        target_directory_acquired = query_user_for_target_folder(pCommandInfo->hwnd, title, startDirContainer, &targetDir[0]);
+    }
+
+
+    if (target_directory_acquired){
         SHFILEOPSTRUCT shFileOp = {
             .hwnd = pCommandInfo->hwnd,
             .wFunc = fileOp,
