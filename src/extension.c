@@ -163,7 +163,8 @@ static bool query_user_for_target_file_path(HWND ownerWnd, u16* sourceFilePath, 
             DWORD dwOptions;
             hr = COM_CALL(pfd, GetOptions, &dwOptions);
             if (SUCCEEDED(hr)){
-                hr = COM_CALL(pfd, SetOptions, dwOptions | FOS_CREATEPROMPT);
+                //Don't ask 'are you sure you want to overwrite' at this moment - SHFileOperation is better at it.
+                hr = COM_CALL(pfd, SetOptions, (dwOptions | FOS_CREATEPROMPT) & (~FOS_OVERWRITEPROMPT));
             }
         }
 
